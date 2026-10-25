@@ -1,0 +1,254 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int       @id @default(autoincrement())
+  name          String
+  email         String    @unique
+  passwordHash  String
+  role          String    @default("USER")
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  projects      Project[]
+  auditLogs     AuditLog[]
+}
+
+model Project {
+  id          Int       @id @default(autoincrement())
+  userId      Int
+  name        String
+  description String?
+  status      String    @default("ACTIVE")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targets     Target[]
+  reports     Report[]
+}
+
+model Target {
+  id                  Int       @id @default(autoincrement())
+  projectId           Int
+  name                String    @default("Target Application")
+  url                 String
+  targetType          String    @default("URL") // URL, FILE_ZIP
+  environment         String    @default("PRODUCTION") // DEVELOPMENT, STAGING, PRODUCTION
+  filePath            String?   // Uploaded zip or folder path for SAST
+  scope               String?   // Assessment scope and boundary rules
+  isAuthorized        Boolean   @default(false)
+  authorizationMethod String?   // DNS, FILE, WRITTEN
+  authorizationStatus String    @default("PENDING") // PENDING, VERIFIED, APPROVED, REJECTED, EXPIRED, FAILED
+  authorizedAt        DateTime?
+  status              String    @default("ACTIVE")
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  project             Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scans               Scan[]
+  scanConfigs         ScanConfiguration[]
+  authorizations      AuthorizationVerification[]
+}
+
+model AuthorizationVerification {
+  id              Int       @id @default(autoincrement())
+  targetId        Int
+  userId          Int?
+  method          String    // DNS, FILE, WRITTEN
+  status          String    @default("PENDING") // PENDING, VERIFIED, APPROVED, REJECTED, EXPIRED, FAILED
+  token           String
+  dnsRecordName   String?
+  dnsExpectedVal  String?
+  fileName        String?
+  filePath        String?
+  fileContent     String?
+  letterFileUrl   String?
+  ownerName       String?
+  ownerTitle      String?
+  scopeJson       String?
+  expiresAt       DateTime?
+  verifiedAt      DateTime?
+  reviewedBy      String?
+  reviewNotes     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  target          Target    @relation(fields: [targetId], references: [id], onDelete: Cascade)
+}
+
+model Scan {
+  id              Int       @id @default(autoincrement())
+  targetId        Int
+  scanMode        String    @default("scan_only") // scan_only, scan_and_fix, scan_fix_test
+  environment     String    @default("PRODUCTION")
+  status          String    @default("PENDING") // QUEUED, VALIDATING, RUNNING, ANALYZING, COMPLETED, PARTIAL, FAILED, CANCELLED
+  progress        Int       @default(0)
+  startedAt       DateTime?
+  endedAt         DateTime?
+  finishedAt      DateTime?
+  summaryJson     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  target          Target    @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  vulnerabilities Vulnerability[]
+  reports         Report[]
+  tasks           ScanTask[]
+  findings        Finding[]
+  aiAnalyses      AIAnalysis[]
+}
+
+model Vulnerability {
+  id          Int       @id @default(autoincrement())
+  scanId      Int
+  title       String
+  description String?
+  severity    String    // LOW, MEDIUM, HIGH, CRITICAL
+  status      String    @default("OPEN") // OPEN, FIXED
+  remediation String?   // How to fix it
+  filePath    String?   // Location of the vulnerability
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  scan        Scan      @relation(fields: [scanId], references: [id], onDelete: Cascade)
+}
+
+model ScanTask {
+  id           Int              @id @default(autoincrement())
+  scanId       Int
+  toolName     String           // OWASP_ZAP, SEMGREP, GITLEAKS, TRIVY, NPM_AUDIT
+  status       String           @default("PENDING") // PENDING, QUEUED, RUNNING, COMPLETED, FAILED, TIMED_OUT, CANCELLED, SKIPPED
+  attempts     Int              @default(0)
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  errorMessage String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  scan         Scan             @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  executions   ToolExecution[]
+}
+
+model ToolExecution {
+  id            Int       @id @default(autoincrement())
+  scanTaskId    Int
+  toolName      String
+  toolVersion   String?
+  exitCode      Int?
+  resultPath    String?
+  rawOutputJson String?
+  errorSummary  String?
+  durationMs    Int?
+  createdAt     DateTime  @default(now())
+  scanTask      ScanTask  @relation(fields: [scanTaskId], references: [id], onDelete: Cascade)
+}
+
+model Finding {
+  id                  Int               @id @default(autoincrement())
+  scanId              Int
+  toolName            String            // OWASP_ZAP, SEMGREP, GITLEAKS, TRIVY, NPM_AUDIT
+  sourceRuleId        String?
+  title               String
+  description         String?
+  severity            String            // CRITICAL, HIGH, MEDIUM, LOW, INFO
+  confidence          String            @default("MEDIUM") // CONFIRMED, POTENTIAL, INFORMATIONAL, HIGH, MEDIUM, LOW
+  verificationStatus  String            @default("UNVERIFIED") // VERIFIED, UNVERIFIED, NEEDS_REVIEW
+  category            String?           // SQL_INJECTION, XSS, HARDCODED_SECRET, VULNERABLE_DEPENDENCY, MISCONFIGURATION, etc.
+  fingerprint         String            // SHA-256 fingerprint for deduplication
+  status              String            @default("OPEN") // OPEN, FIXED, FALSE_POSITIVE, MUTED
+  remediation         String?           // Recommended text-only advice
+  cwe                 String?
+  cve                 String?
+  cvssScore           Float?
+  cvssVector          String?
+  relatedFindingsJson String?           // JSON list of correlated findings for cross-tool intelligence
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  scan                Scan              @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  evidences           FindingEvidence[]
+  occurrences         FindingOccurrence[]
+  aiAnalyses          AIAnalysis[]
+}
+
+model FindingEvidence {
+  id              Int       @id @default(autoincrement())
+  findingId       Int
+  url             String?
+  filePath        String?
+  lineStart       Int?
+  lineEnd         Int?
+  evidenceSummary String?
+  rawSnippet      String?
+  httpMethod      String?
+  paramName       String?
+  scanner         String?
+  ruleId          String?
+  createdAt       DateTime  @default(now())
+  finding         Finding   @relation(fields: [findingId], references: [id], onDelete: Cascade)
+}
+
+model FindingOccurrence {
+  id                 Int       @id @default(autoincrement())
+  findingId          Int
+  scanner            String    // SEMGREP, GITLEAKS, OWASP_ZAP, etc.
+  ruleId             String?
+  filePath           String?
+  lineStart          Int?
+  lineEnd            Int?
+  snippet            String?
+  normalizedEvidence String?
+  createdAt          DateTime  @default(now())
+  finding            Finding   @relation(fields: [findingId], references: [id], onDelete: Cascade)
+}
+
+model AIAnalysis {
+  id                       Int       @id @default(autoincrement())
+  scanId                   Int
+  findingId                Int?
+  model                    String    @default("SentinelAI-SecAudit-Pro")
+  summary                  String?
+  technicalDetails         String?
+  impact                   String?
+  evidenceExplanation      String?
+  severityRationale        String?
+  recommendedRemediation   String?   // Strictly text-based remediation advice
+  references               String?
+  confidenceAndLimitations String?
+  analysisJson             String?
+  createdAt                DateTime  @default(now())
+  scan                     Scan      @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  finding                  Finding?  @relation(fields: [findingId], references: [id], onDelete: Cascade)
+}
+
+model Report {
+  id          Int       @id @default(autoincrement())
+  projectId   Int
+  scanId      Int
+  title       String
+  reportUrl   String?
+  format      String?   @default("JSON") // JSON, HTML, PDF
+  storagePath String?
+  summaryJson String?
+  createdAt   DateTime  @default(now())
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scan        Scan      @relation(fields: [scanId], references: [id], onDelete: Cascade)
+}
+
+model ScanConfiguration {
+  id          Int       @id @default(autoincrement())
+  targetId    Int
+  configJson  String
+  createdAt   DateTime  @default(now())
+  target      Target    @relation(fields: [targetId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  action    String
+  details   String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+}
