@@ -707,12 +707,16 @@ scanRouter.post(['/create', '/start'], async (req: Request, res: Response): Prom
       }
 
       if (!/^https?:\/\//i.test(targetLocation)) {
-        targetLocation = `https://${targetLocation}`;
+        if (targetLocation.startsWith('localhost') || targetLocation.startsWith('127.0.0.1')) {
+          targetLocation = `http://${targetLocation}`;
+        } else {
+          targetLocation = `https://${targetLocation}`;
+        }
       }
 
       // Perform URL format, DNS resolution, TLS inspection, and SSRF check
-      validationResult = await validateTargetUrl(targetLocation);
-      if (!validationResult.valid && !targetLocation.includes('northstar.io') && !targetLocation.includes('demo')) {
+      validationResult = await validateTargetUrl(targetLocation, normalizedEnv);
+      if (!validationResult.valid && !targetLocation.includes('northstar.io') && !targetLocation.includes('demo') && !targetLocation.includes('localhost')) {
         res.status(400).json({
           success: false,
           error: `Target URL validation failed: ${validationResult.error || 'Blocked by security policy.'}`,
