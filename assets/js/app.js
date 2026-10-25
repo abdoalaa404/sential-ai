@@ -2441,38 +2441,68 @@ const App = {
         const first = files[0];
         const folderName = first.webkitRelativePath ? first.webkitRelativePath.split('/')[0] : 'project_source';
         this.scanState.isUploading = true;
-        showToast(`Analyzing folder "${folderName}" (${files.length} items found)...`, 'info');
+
+        const isAr = window.I18n && window.I18n.currentLang === 'ar';
+        showToast(isAr ? `جاري فحص وتجهيز مجلد "${folderName}" (${files.length} ملف)...` : `Analyzing folder "${folderName}" (${files.length} items found)...`, 'info');
 
         try {
             const formData = new FormData();
             formData.append('folderName', folderName);
 
+            const IGNORED_SEGMENTS = [
+                'node_modules', '.git', '.github', '.vscode', '.idea',
+                'dist', 'build', '.next', '.nuxt', 'out', 'coverage',
+                'vendor', 'venv', '.venv', 'env', '__pycache__',
+                'storage', 'uploads', '.cache', '.turbo', '.svn', '.gemini'
+            ];
+
+            const EXCLUDED_EXTS = [
+                '.rar', '.zip', '.7z', '.tar', '.gz', '.iso', '.exe', '.dll', '.bin',
+                '.mp4', '.avi', '.mov', '.wmv', '.mkv', '.webm',
+                '.mp3', '.wav', '.ogg',
+                '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg', '.bmp', '.tiff',
+                '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
+                '.db', '.sqlite', '.sqlite3', '.db-journal',
+                '.woff', '.woff2', '.ttf', '.eot', '.otf',
+                '.map'
+            ];
+
             let addedCount = 0;
             for (let i = 0; i < files.length; i++) {
                 const f = files[i];
                 const relPath = f.webkitRelativePath || f.name;
-                // Exclude massive binary/cache directories
-                if (relPath.includes('node_modules/') || relPath.includes('node_modules\\') ||
-                    relPath.includes('/.git/') || relPath.includes('\\.git\\') ||
-                    relPath.includes('/dist/') || relPath.includes('\\dist\\') ||
-                    relPath.includes('/.next/') || relPath.includes('\\.next\\') ||
-                    relPath.includes('/build/') || relPath.includes('\\build\\') ||
-                    relPath.includes('/coverage/') || relPath.includes('\\coverage\\')) {
-                    continue;
-                }
+                const normalized = relPath.replace(/\\/g, '/');
+                const lower = normalized.toLowerCase();
+
+                // Check directory segments
+                const segments = lower.split('/');
+                const hasIgnoredDir = segments.some(seg => IGNORED_SEGMENTS.includes(seg));
+                if (hasIgnoredDir) continue;
+
+                // Check extension
+                const isExcludedExt = EXCLUDED_EXTS.some(ext => lower.endsWith(ext));
+                if (isExcludedExt) continue;
+
+                // Skip single files larger than 10MB
+                if (f.size > 10 * 1024 * 1024) continue;
+
                 formData.append('files', f);
                 formData.append('paths', relPath);
                 addedCount++;
-                if (addedCount >= 950) break; // support up to 950 files
+                if (addedCount >= 2000) break; // support up to 2000 code files
             }
 
             if (addedCount === 0) {
-                showToast(`No source code files found in "${folderName}". (Cache and node_modules are excluded).`, 'error');
+                showToast(isAr 
+                    ? `لم يتم العثور على ملفات أكواد صالحة في "${folderName}". تم استبعاد مجلدات الكاش ومكتبات node_modules.` 
+                    : `No valid source code files found in "${folderName}". (Cache and node_modules are excluded).`, 'error');
                 this.scanState.isUploading = false;
                 return;
             }
 
-            showToast(`Uploading ${addedCount} source files from "${folderName}"...`, 'info');
+            showToast(isAr 
+                ? `جاري رفع ${addedCount} ملف كود مصدري من "${folderName}"...` 
+                : `Uploading ${addedCount} source files from "${folderName}"...`, 'info');
             const res = await API.uploadFolder(formData);
 
             if (res.file) {

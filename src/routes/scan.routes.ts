@@ -47,7 +47,12 @@ const upload = multer({
 
 const folderUpload = multer({
   storage,
-  limits: { fileSize: 1024 * 1024 * 1024, files: 1000 },
+  limits: {
+    fileSize: 100 * 1024 * 1024, // 100MB max per file
+    files: 5000,                  // support up to 5000 files
+    fields: 10000,                // support up to 10000 path metadata fields
+    parts: 15000,                 // support up to 15000 parts
+  },
 });
 
 /**
@@ -115,70 +120,81 @@ scanRouter.post('/upload', upload.single('file'), (req: Request, res: Response):
  * POST /api/scans/upload-folder
  * Upload entire folder with relative directory paths preserved
  */
-scanRouter.post('/upload-folder', folderUpload.array('files', 1000), (req: Request, res: Response): void => {
-  try {
-    const files = req.files as Express.Multer.File[];
-    if (!files || files.length === 0) {
-      res.status(400).json({ success: false, error: 'No files were uploaded.' });
+scanRouter.post('/upload-folder', (req: Request, res: Response): void => {
+  folderUpload.array('files', 5000)(req, res, (err) => {
+    if (err) {
+      console.error('Folder upload Multer error:', err);
+      const errMsg = (err instanceof multer.MulterError)
+        ? `Multer Error (${err.code}): ${err.message}`
+        : (err.message || 'Folder upload failed');
+      res.status(400).json({ success: false, error: errMsg });
       return;
     }
 
-    const folderName = (req.body.folderName || 'project_source').replace(/[^a-zA-Z0-9_-]/g, '_');
-    const extractDir = path.join(uploadDir, 'extracted', `${Date.now()}-${folderName}`);
-    fs.mkdirSync(extractDir, { recursive: true });
-
-    let pathsList: string[] = [];
-    if (req.body.paths) {
-      pathsList = Array.isArray(req.body.paths) ? req.body.paths : [req.body.paths];
-    }
-
-    let savedCount = 0;
-    let totalLines = 0;
-
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      let relPath = pathsList[i] || f.originalname;
-
-      // Strip leading folderName/ if present
-      if (relPath.startsWith(`${folderName}/`) || relPath.startsWith(`${folderName}\\`)) {
-        relPath = relPath.slice(folderName.length + 1);
+    try {
+      const files = req.files as Express.Multer.File[];
+      if (!files || files.length === 0) {
+        res.status(400).json({ success: false, error: 'No files were uploaded.' });
+        return;
       }
 
-      // Security: Prevent directory traversal outside extractDir
-      const safeRelPath = path.normalize(relPath).replace(/^(\.\.[\/\\])+/, '');
-      const targetPath = path.join(extractDir, safeRelPath);
-      const targetParent = path.dirname(targetPath);
-      if (!fs.existsSync(targetParent)) {
-        fs.mkdirSync(targetParent, { recursive: true });
+      const folderName = (req.body.folderName || 'project_source').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const extractDir = path.join(uploadDir, 'extracted', `${Date.now()}-${folderName}`);
+      fs.mkdirSync(extractDir, { recursive: true });
+
+      let pathsList: string[] = [];
+      if (req.body.paths) {
+        pathsList = Array.isArray(req.body.paths) ? req.body.paths : [req.body.paths];
       }
 
-      fs.copyFileSync(f.path, targetPath);
-      try { fs.unlinkSync(f.path); } catch {} // remove temp multer file
+      let savedCount = 0;
+      let totalLines = 0;
 
-      savedCount++;
-      try {
-        const content = fs.readFileSync(targetPath, 'utf8');
-        totalLines += content.split('\n').length;
-      } catch {}
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        let relPath = pathsList[i] || f.originalname;
+
+        // Strip leading folderName/ if present
+        if (relPath.startsWith(`${folderName}/`) || relPath.startsWith(`${folderName}\\`)) {
+          relPath = relPath.slice(folderName.length + 1);
+        }
+
+        // Security: Prevent directory traversal outside extractDir
+        const safeRelPath = path.normalize(relPath).replace(/^(\.\.[\/\\])+/, '');
+        const targetPath = path.join(extractDir, safeRelPath);
+        const targetParent = path.dirname(targetPath);
+        if (!fs.existsSync(targetParent)) {
+          fs.mkdirSync(targetParent, { recursive: true });
+        }
+
+        fs.copyFileSync(f.path, targetPath);
+        try { fs.unlinkSync(f.path); } catch {} // remove temp multer file
+
+        savedCount++;
+        try {
+          const content = fs.readFileSync(targetPath, 'utf8');
+          totalLines += content.split('\n').length;
+        } catch {}
+      }
+
+      res.status(200).json({
+        success: true,
+        message: `Folder "${folderName}" uploaded successfully (${savedCount} files, ${totalLines.toLocaleString()} lines of code indexed).`,
+        file: {
+          originalName: folderName,
+          storedName: path.basename(extractDir),
+          size: files.reduce((acc, f) => acc + f.size, 0),
+          path: extractDir,
+          fileType: 'folder',
+          filesCount: savedCount,
+          totalLines,
+        },
+      });
+    } catch (error) {
+      console.error('Folder upload error:', error);
+      res.status(500).json({ success: false, error: (error as Error).message });
     }
-
-    res.status(200).json({
-      success: true,
-      message: `Folder "${folderName}" uploaded successfully (${savedCount} files, ${totalLines.toLocaleString()} lines of code indexed).`,
-      file: {
-        originalName: folderName,
-        storedName: path.basename(extractDir),
-        size: files.reduce((acc, f) => acc + f.size, 0),
-        path: extractDir,
-        fileType: 'folder',
-        filesCount: savedCount,
-        totalLines,
-      },
-    });
-  } catch (error) {
-    console.error('Folder upload error:', error);
-    res.status(500).json({ success: false, error: (error as Error).message });
-  }
+  });
 });
 
 /**
